@@ -6,6 +6,7 @@ uvicorn[standard]==0.30.0
 sqlalchemy==2.0.36
 asyncpg==0.30.0              # PostgreSQL async driver
 alembic==1.14.0              # DB migrations
+psycopg2-binary==2.9.11
 greenlet>=3.0.0              # required by SQLAlchemy async
 
 # ── Validation & Settings ──────────────────────────────────────────────────────
