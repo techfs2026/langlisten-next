@@ -63,7 +63,7 @@ class Settings(BaseSettings):
 
     # ── App ───────────────────────────────────────────────────────────────────
     debug: bool = False
-    allowed_origins: str = "http://localhost:5173,http://localhost:5174"
+    allowed_origins: str = "http://localhost:3000"
 
     @property
     def allowed_origins_list(self) -> list[str]:
