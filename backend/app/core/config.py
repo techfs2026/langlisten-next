@@ -51,9 +51,10 @@ class Settings(BaseSettings):
     minio_secure: bool = False
 
     # ── Whisper ───────────────────────────────────────────────────────────────
+    # Backend is auto-detected: Apple Silicon → mlx, NVIDIA → faster-whisper cuda, else cpu
     whisper_model: str = "medium"
-    whisper_device: str = "cpu"
-    whisper_compute_type: str = "int8"
+    whisper_device: str = "cpu"          # for faster_whisper CPU fallback
+    whisper_compute_type: str = "int8"   # for faster_whisper CPU fallback
 
     # ── LLM ───────────────────────────────────────────────────────────────────
     llm_api_key: str = ""
