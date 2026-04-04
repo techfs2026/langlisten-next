@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models.material import AudioMaterial
 from app.schemas.material import MaterialListItem, MaterialResponse, PaginatedMaterials
-from app.services.ffmpeg_service import get_duration
+from app.services.ffmpeg_service import get_duration, convert_to_cbr_mp3
 from app.storage.factory import get_storage
 
 logger = logging.getLogger(__name__)
@@ -113,17 +113,33 @@ async def upload_material(
         )
 
     ts = int(datetime.now(timezone.utc).timestamp() * 1000)
-    stored_filename = f"{ts}{suffix}"
-
     storage = get_storage()
-    file_path = await storage.save(data, stored_filename)
-    duration = await get_duration(file_path)
+
+    # 1. 原始文件存为临时路径（带原始后缀）
+    tmp_filename = f"{ts}_tmp{suffix}"
+    tmp_path = await storage.save(data, tmp_filename)
+
+    # 2. 转换为 CBR MP3（最终入库的文件）
+    final_filename = f"{ts}.mp3"
+    final_path = str(Path(tmp_path).parent / final_filename)
+    try:
+        await convert_to_cbr_mp3(tmp_path, final_path)
+    except Exception as e:
+        # 转换失败时清理临时文件，不入库
+        Path(tmp_path).unlink(missing_ok=True)
+        logger.error(f"CBR conversion failed for {tmp_path}: {e}")
+        raise HTTPException(status_code=500, detail="Audio conversion failed")
+    finally:
+        # 无论成功失败都删临时文件
+        Path(tmp_path).unlink(missing_ok=True)
+
+    duration = await get_duration(final_path)
 
     material = AudioMaterial(
         title=title,
-        filename=file.filename,
-        file_path=file_path,
-        file_hash=file_hash,
+        filename=file.filename,       # 保留原始文件名供展示
+        file_path=final_path,         # 存 CBR MP3 路径
+        file_hash=file_hash,          # hash 仍基于原始内容，保证去重逻辑不变
         duration=duration,
         status="pending",
     )
@@ -131,7 +147,7 @@ async def upload_material(
     await db.commit()
     await db.refresh(material)
 
-    logger.info(f"Uploaded material id={material.id} title={material.title!r}")
+    logger.info(f"Uploaded material id={material.id} title={material.title!r} (CBR MP3)")
     return _build_response(material)
 
 

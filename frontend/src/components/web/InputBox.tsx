@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect, useState } from "react";
+import { useRef, useEffect, useState, forwardRef, useImperativeHandle } from "react";
 import { Button } from "antd";
 import { SendOutlined } from "@ant-design/icons";
 
@@ -11,16 +11,25 @@ interface Props {
   placeholder?: string;
 }
 
-export function InputBox({ onSubmit, loading, disabled, placeholder }: Props) {
-  const [value, setValue] = useState("");
-  const ref = useRef<HTMLTextAreaElement>(null);
+export interface InputBoxHandle {
+  focus: () => void;
+}
 
-  // 切句时重置内容（key={currentIdx} 会重新挂载，这个 effect 其实不需要了，保留无害）
+export const InputBox = forwardRef<InputBoxHandle, Props>(function InputBox(
+  { onSubmit, loading, disabled, placeholder },
+  ref
+) {
+  const [value, setValue] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // 暴露 focus 方法给父组件
+  useImperativeHandle(ref, () => ({
+    focus: () => textareaRef.current?.focus(),
+  }));
+
   useEffect(() => {
     setValue("");
   }, [disabled]);
-
-  // 不再自动 focus，避免切句时抢走焦点
 
   const submit = () => {
     const v = value.trim();
@@ -34,7 +43,7 @@ export function InputBox({ onSubmit, loading, disabled, placeholder }: Props) {
       style={{ border: "1px solid var(--border)", background: "var(--surface)" }}
     >
       <textarea
-        ref={ref}
+        ref={textareaRef}
         rows={3}
         value={value}
         onChange={(e) => setValue(e.target.value)}
@@ -42,6 +51,10 @@ export function InputBox({ onSubmit, loading, disabled, placeholder }: Props) {
           if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
             submit();
+          }
+          if (e.key === "Tab") {
+            e.preventDefault();   // 阻止默认跳焦点行为
+            textareaRef.current?.blur();
           }
         }}
         disabled={disabled || loading}
@@ -52,7 +65,7 @@ export function InputBox({ onSubmit, loading, disabled, placeholder }: Props) {
       <div className="px-4 py-2 flex items-center justify-between"
            style={{ background: "var(--surface2)" }}>
         <span className="text-xs" style={{ color: "var(--text-3)" }}>
-          Enter 提交 · Shift+Enter 换行
+          Enter 提交 · Shift+Enter 换行 · Tab 切换焦点
         </span>
         <Button
           type="primary"
@@ -68,4 +81,4 @@ export function InputBox({ onSubmit, loading, disabled, placeholder }: Props) {
       </div>
     </div>
   );
-}
+});

@@ -5,6 +5,7 @@ import { Button, Tooltip, App } from "antd";
 import {
   PlayCircleOutlined, PauseCircleOutlined,
   StepBackwardOutlined, StepForwardOutlined, RetweetOutlined,
+  DashboardOutlined,
 } from "@ant-design/icons";
 import WaveSurfer from "wavesurfer.js";
 import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.js";
@@ -25,17 +26,8 @@ interface Props {
 
 const MIN_PPS = 40;
 const MAX_PPS = 400;
+const SPEEDS = [0.5, 0.75, 1.0];
 
-/**
- * 计算可见窗口，保证：左侧部分上一句 + 完整当前句 + 右侧部分下一句都在视野内。
- *
- * 策略：
- *  - 左侧留白 = 当前句时长 * LEFT_PAD_RATIO（固定比例，展示上一句尾部）
- *  - 右侧留白 = 当前句时长 * RIGHT_PAD_RATIO（固定比例，展示下一句头部）
- *  - 用总范围 / 容器宽度 算出 pps，钳制在 [MIN_PPS, MAX_PPS]
- *
- * 注意：右侧留白只是视觉 padding，不需要真的延伸到下一句末尾。
- */
 function calcViewWindow(
   subtitles: Subtitle[],
   idx: number,
@@ -45,16 +37,11 @@ function calcViewWindow(
   if (!cur || containerWidth <= 0) return { pps: MIN_PPS, scrollTime: 0 };
 
   const curDur = Math.max(0.1, cur.end_time - cur.start_time);
-
-  // 左右各留当前句时长的 25% 作为上下文 padding
   const LEFT_PAD_RATIO = 0.25;
   const RIGHT_PAD_RATIO = 0.25;
 
-  const leftPad = curDur * LEFT_PAD_RATIO;
-  const rightPad = curDur * RIGHT_PAD_RATIO;
-
-  const viewStart = Math.max(0, cur.start_time - leftPad);
-  const viewEnd = cur.end_time + rightPad;
+  const viewStart = Math.max(0, cur.start_time - curDur * LEFT_PAD_RATIO);
+  const viewEnd = cur.end_time + curDur * RIGHT_PAD_RATIO;
   const rangeSeconds = viewEnd - viewStart;
 
   const rawPps = containerWidth / rangeSeconds;
@@ -82,6 +69,8 @@ export function AudioPlayer({
   const [isPlaying, setIsPlaying] = useState(false);
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
+  const [speed, setSpeed] = useState(1.0);
+
   useEffect(() => { currentIdxRef.current = currentIdx; }, [currentIdx]);
   useEffect(() => { loopingRef.current = looping; }, [looping]);
   useEffect(() => { canGoNextRef.current = canGoNext; }, [canGoNext]);
@@ -91,15 +80,34 @@ export function AudioPlayer({
   const fmt = (s: number) =>
     `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
-  // ── 切句时重算缩放窗口 ─────────────────────────────────────────────────────
+  // ── 速度切换 ───────────────────────────────────────────────────────────────
+  const handleSpeedChange = useCallback(() => {
+    const nextIdx = (SPEEDS.indexOf(speed) + 1) % SPEEDS.length;
+    const nextSpeed = SPEEDS[nextIdx];
+    setSpeed(nextSpeed);
+    wsRef.current?.setPlaybackRate(nextSpeed, true);
+  }, [speed]);
+
+  // ── 外部切句时：跳转播放位置 + 重算缩放窗口 ──────────────────────────────
+  // page.tsx 的句子导航只改了 store idx，没有通知 WaveSurfer，这里补上。
+  // AudioPlayer 内部的 seekTo 已经自己调 jumpTo，不会重复执行（jumpTo 会设
+  // isSeekingRef，audioprocess 不会误触发）。
   useEffect(() => {
     const ws = wsRef.current;
     const container = containerRef.current;
     if (!ws || !container) return;
-    const { pps, scrollTime } = calcViewWindow(subtitles, currentIdx, container.clientWidth);
+
+    const sub = subtitlesRef.current[currentIdx];
+    if (sub) {
+      const wasPlaying = ws.isPlaying();
+      jumpTo(sub.start_time, wasPlaying);
+    }
+
+    const { pps, scrollTime } = calcViewWindow(subtitlesRef.current, currentIdx, container.clientWidth);
     ws.zoom(pps);
     requestAnimationFrame(() => ws.setScrollTime(scrollTime));
-  }, [currentIdx, subtitles]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentIdx]);
 
   // ── 统一跳转 ───────────────────────────────────────────────────────────────
   const jumpTo = useCallback((time: number, andPlay = false) => {
@@ -142,7 +150,6 @@ export function AudioPlayer({
       height: 110,
       minPxPerSec: initPps,
       plugins: [regions, timeline, hover],
-      backend: "WebAudio",
       url: `${API_BASE}${audioUrl}`,
     });
 
@@ -185,7 +192,6 @@ export function AudioPlayer({
           sentenceEndPausedRef.current = true;
           ws.pause();
           ws.setTime(sub.start_time);
-          // 播放完后重新计算视口，确保显示：部分前一句 + 当前句 + 部分后一句
           requestAnimationFrame(() => requestAnimationFrame(() => {
             isSeekingRef.current = false;
             const container = containerRef.current;
@@ -202,7 +208,6 @@ export function AudioPlayer({
       }
     });
 
-    // ── 用 WaveSurfer interaction 事件处理点击 seek ──────────────────────    // interact: true 才能触发 interaction 事件，WS 自己算点击时间，不需要手动查 Shadow DOM
     ws.on("interaction", (clickedTime: number) => {
       if (isSeekingRef.current) return;
 
@@ -212,14 +217,12 @@ export function AudioPlayer({
       );
 
       if (idx < 0) {
-        // 点在句间空白：只移动播放头，不切换当前句
         jumpTo(clickedTime, false);
         return;
       }
 
       if (idx > currentIdxRef.current && !canGoNextRef.current) {
         message.warning({ content: "请先提交本句再继续", key: "no-next", duration: 2 });
-        // 把播放头拉回当前句起点，避免停在禁止区域
         jumpTo(subs[currentIdxRef.current].start_time, false);
         return;
       }
@@ -291,17 +294,28 @@ export function AudioPlayer({
     }
   }, [subtitles, jumpTo]);
 
-  // ── listen for keyboard events from page ──────────────────────────────────
+  // ── 监听来自 page 的自定义事件 ────────────────────────────────────────────
   useEffect(() => {
     const onPlayPause = () => handlePlayPause();
     const onToggleLoop = () => onLoopingChangeRef.current(!loopingRef.current);
+    // 「再听一次」：从当前句起点重新播放
+    const onReplay = () => {
+      const sub = subtitlesRef.current[currentIdxRef.current];
+      if (sub) jumpTo(sub.start_time, true);
+    };
     window.addEventListener("practice:playpause", onPlayPause);
     window.addEventListener("practice:toggleloop", onToggleLoop);
+    window.addEventListener("practice:replay", onReplay);
     return () => {
       window.removeEventListener("practice:playpause", onPlayPause);
       window.removeEventListener("practice:toggleloop", onToggleLoop);
+      window.removeEventListener("practice:replay", onReplay);
     };
-  }, [handlePlayPause]);
+  }, [handlePlayPause, jumpTo]);
+
+  // ── 速度标签颜色 ──────────────────────────────────────────────────────────
+  const speedLabel = speed === 1.0 ? "1x" : `${speed}x`;
+  const speedIsSlowed = speed < 1.0;
 
   return (
     <div
@@ -321,7 +335,9 @@ export function AudioPlayer({
         <Button
           type="primary" shape="circle"
           className="!w-10 !h-10 flex items-center justify-center flex-shrink-0"
-          icon={isPlaying ? <PauseCircleOutlined className="text-xl" /> : <PlayCircleOutlined className="text-xl" />}
+          icon={isPlaying
+            ? <PauseCircleOutlined className="text-xl" />
+            : <PlayCircleOutlined className="text-xl" />}
           onClick={handlePlayPause}
         />
 
@@ -336,6 +352,19 @@ export function AudioPlayer({
             type={looping ? "primary" : "default"}
             onClick={() => onLoopingChange(!looping)}>
             循环
+          </Button>
+        </Tooltip>
+
+        {/* 速度切换：点击循环 0.5x → 0.75x → 1x */}
+        <Tooltip title="切换播放速度">
+          <Button
+            size="small"
+            icon={<DashboardOutlined />}
+            type={speedIsSlowed ? "primary" : "default"}
+            onClick={handleSpeedChange}
+            style={{ minWidth: 56, fontVariantNumeric: "tabular-nums" }}
+          >
+            {speedLabel}
           </Button>
         </Tooltip>
 

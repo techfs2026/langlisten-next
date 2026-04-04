@@ -23,6 +23,10 @@
   box-sizing: border-box;
 }
 
+html {
+  font-size: 20px; /* rem 基准，影响所有 Tailwind text-* 类 */
+}
+
 body {
   background: var(--bg);
   color: var(--text);

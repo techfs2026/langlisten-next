@@ -12,7 +12,7 @@ import {
 import { usePracticeStore } from "@/lib/stores/practiceStore";
 import { useReviewStore, AUTO_ADD_THRESHOLD } from "@/lib/stores/reviewStore";
 import { AudioPlayer } from "@/components/web/AudioPlayer";
-import { InputBox } from "@/components/web/InputBox";
+import { InputBox, type InputBoxHandle } from "@/components/web/InputBox";
 import { DiffResult } from "@/components/web/DiffResult";
 import { ReviewDrawer } from "@/components/web/ReviewDrawer";
 import { getStoredUserId } from "@/lib/api/identity";
@@ -51,7 +51,9 @@ export default function PracticePage({
 
   const [looping, setLooping] = useState(false);
   const [latestResult, setLatestResult] = useState<AttemptResult | null>(null);
+  const [inputKey, setInputKey] = useState(0);
   const sessionCreatedRef = useRef(false);
+  const inputBoxRef = useRef<InputBoxHandle>(null);
 
   // init store + session once subtitles load
   useEffect(() => {
@@ -128,6 +130,15 @@ export default function PracticePage({
       }
       if (e.key === "r" || e.key === "R") {
         window.dispatchEvent(new CustomEvent("practice:toggleloop"));
+      }
+      if (e.key === "Tab") {
+        e.preventDefault();
+        inputBoxRef.current?.focus();
+      }
+      if (e.key === "t" || e.key === "T") {
+        // T 键触发再听，同时清空 input
+        setInputKey((k) => k + 1);
+        window.dispatchEvent(new CustomEvent("practice:replay"));
       }
     };
     window.addEventListener("keydown", handler);
@@ -253,6 +264,8 @@ export default function PracticePage({
                 ["Space", "播放"],
                 ["← →", "切句"],
                 ["R", "循环"],
+                ["T", "再听"],
+                ["Tab", "输入"],
               ].map(([k, v]) => (
                 <span key={k} className="text-xs flex items-center gap-1"
                       style={{ color: "var(--text-3)" }}>
@@ -289,9 +302,10 @@ export default function PracticePage({
 
         {/* ── zone 3: input ── */}
         <InputBox
+          ref={inputBoxRef}
           onSubmit={handleSubmit}
           loading={submitAttempt.isPending}
-          key={currentIdx}
+          key={`${currentIdx}-${inputKey}`}
         />
 
         {/* ── diff result ── */}
@@ -301,6 +315,10 @@ export default function PracticePage({
             score={latestResult.score}
             reference={latestResult.reference}
             subtitle={currentSub}
+            onReplay={() => {
+              setInputKey((k) => k + 1);
+              window.dispatchEvent(new CustomEvent("practice:replay"));
+            }}
           />
         )}
 

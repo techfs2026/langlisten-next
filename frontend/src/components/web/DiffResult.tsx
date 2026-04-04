@@ -1,5 +1,5 @@
 import { Button, Tooltip } from "antd";
-import { BookOutlined, CheckCircleOutlined } from "@ant-design/icons";
+import { BookOutlined, CheckCircleOutlined, ReloadOutlined } from "@ant-design/icons";
 import type { DiffToken } from "@/lib/api/practice";
 import type { Subtitle } from "@/types";
 import { useReviewStore } from "@/lib/stores/reviewStore";
@@ -9,9 +9,10 @@ interface Props {
   score: number;
   reference: string;
   subtitle: Subtitle;
+  onReplay: () => void;
 }
 
-export function DiffResult({ diff, score, reference, subtitle }: Props) {
+export function DiffResult({ diff, score, reference, subtitle, onReplay }: Props) {
   const pct = Math.round(score * 100);
   const scoreColor =
     pct >= 90 ? "#16a34a" : pct >= 60 ? "#d97706" : "#dc2626";
@@ -42,6 +43,18 @@ export function DiffResult({ diff, score, reference, subtitle }: Props) {
           style={{ color: scoreColor }}>
           {pct}%
         </span>
+
+        {/* 再听一次 */}
+        <Tooltip title="从头再听本句">
+          <Button
+            size="small"
+            icon={<ReloadOutlined />}
+            onClick={onReplay}
+            style={{ borderRadius: 8, flexShrink: 0 }}
+          >
+            再听
+          </Button>
+        </Tooltip>
 
         {/* 加入/移除复习队列 */}
         <Tooltip title={inQueue ? "从复习队列移除" : "加入复习队列"}>

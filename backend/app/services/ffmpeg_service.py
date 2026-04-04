@@ -4,12 +4,12 @@ FFmpeg utilities for audio preprocessing.
 Responsibilities:
 - Get audio duration
 - Convert any audio format to 16kHz mono WAV for Whisper
+- Convert any audio to CBR MP3 for web playback (ensures MediaElement sync)
 - Run in a thread (CPU-bound, must not block the async event loop)
 """
 
 import asyncio
 import logging
-from pathlib import Path
 
 import ffmpeg
 
@@ -39,6 +39,25 @@ def _convert_to_wav(src: str, dst: str) -> None:
     )
 
 
+def _convert_to_cbr_mp3(src: str, dst: str, bitrate: str = "128k") -> None:
+    """
+    Synchronous: convert any audio to CBR MP3 for web playback.
+    CBR ensures MediaElement backend stays in sync with the waveform,
+    which allows preservesPitch (变速不变调) to work correctly.
+    """
+    (
+        ffmpeg.input(src)
+        .output(
+            dst,
+            acodec="libmp3lame",
+            audio_bitrate=bitrate,
+            **{"abr": "0"},          # disable ABR, force strict CBR
+        )
+        .overwrite_output()
+        .run(quiet=True)
+    )
+
+
 async def get_duration(path: str) -> float:
     """Async wrapper — runs ffprobe in a thread pool."""
     return await asyncio.to_thread(_get_duration, path)
@@ -49,3 +68,10 @@ async def convert_to_wav(src: str, dst: str) -> None:
     logger.info(f"Converting {src} → {dst}")
     await asyncio.to_thread(_convert_to_wav, src, dst)
     logger.info(f"Conversion complete: {dst}")
+
+
+async def convert_to_cbr_mp3(src: str, dst: str, bitrate: str = "128k") -> None:
+    """Async wrapper — runs CBR MP3 conversion in a thread pool."""
+    logger.info(f"Converting to CBR MP3: {src} → {dst}")
+    await asyncio.to_thread(_convert_to_cbr_mp3, src, dst, bitrate)
+    logger.info(f"CBR conversion complete: {dst}")
