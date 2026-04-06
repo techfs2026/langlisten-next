@@ -87,7 +87,6 @@ def _do_transcribe(task_id: str, material_id: int, language: str, engine):
 
         # ── Step 3: transcribe ────────────────────────────────────────────────
         def on_progress(current: int, total: int, message: str):
-            # transcriber reports 0-3 steps, map to 5-95%
             pct = 5 + int(90 * current / total) if total > 0 else 5
             set_progress_sync(task_id, pct, 100, message)
             logger.info(f"[Task {task_id}] {pct}% {message}")
@@ -103,21 +102,28 @@ def _do_transcribe(task_id: str, material_id: int, language: str, engine):
             on_progress=on_progress,
         )
 
-        # ── Step 4: persist subtitles ─────────────────────────────────────────
+        # ── Step 4: persist subtitles (atomic: delete old + bulk insert new) ──
+        #
+        # delete and insert are in the same transaction — if anything fails,
+        # the whole block rolls back and the old subtitles remain intact.
+        # bulk_insert_mappings sends a single multi-row INSERT instead of
+        # one INSERT per segment, which significantly reduces DB round-trips.
         set_progress_sync(task_id, 96, 100, "写入数据库...")
         with Session(engine) as db:
             db.execute(delete(Subtitle).where(Subtitle.material_id == material_id))
-            db.flush()
 
-            for seg in segments:
-                db.add(Subtitle(
-                    material_id=material_id,
-                    seq=seg.seq,
-                    start_time=seg.start_time,
-                    end_time=seg.end_time,
-                    text=seg.text,
-                    is_verified=False,
-                ))
+            if segments:
+                db.bulk_insert_mappings(Subtitle, [
+                    {
+                        "material_id": material_id,
+                        "seq":         seg.seq,
+                        "start_time":  seg.start_time,
+                        "end_time":    seg.end_time,
+                        "text":        seg.text,
+                        "is_verified": False,
+                    }
+                    for seg in segments
+                ])
 
             material = db.get(AudioMaterial, material_id)
             material.status = "transcribed"

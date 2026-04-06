@@ -52,7 +52,7 @@ class Settings(BaseSettings):
 
     # ── Whisper ───────────────────────────────────────────────────────────────
     # Backend is auto-detected: Apple Silicon → mlx, NVIDIA → faster-whisper cuda, else cpu
-    whisper_model: str = "medium"
+    whisper_model: str = "large-v3"
     whisper_device: str = "cpu"          # for faster_whisper CPU fallback
     whisper_compute_type: str = "int8"   # for faster_whisper CPU fallback
 

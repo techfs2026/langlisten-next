@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Checkbox, Tooltip } from "antd";
-import { CheckCircleFilled } from "@ant-design/icons";
+import { Checkbox, Tooltip, Button } from "antd";
+import { CheckCircleFilled, CheckSquareOutlined, BorderOutlined } from "@ant-design/icons";
 import clsx from "clsx";
 import { useWaveStore } from "@/lib/stores/waveStore";
 
@@ -81,6 +81,14 @@ export function SubtitleList() {
     window.dispatchEvent(new CustomEvent("syncRegion", { detail: idx }));
   };
 
+  // Click on seq column: seek waveform to this subtitle's start time.
+  // activateRow → WaveformEditor.seekToSubtitle (moves playhead + highlights region)
+  // syncRegion  → only updates region bounds, does NOT move the playhead
+  const handleSeqClick = (e: React.MouseEvent, i: number) => {
+    e.stopPropagation();
+    window.dispatchEvent(new CustomEvent("activateRow", { detail: i }));
+  };
+
   if (subtitles.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3 text-[var(--text-3)]">
@@ -93,22 +101,64 @@ export function SubtitleList() {
   }
 
   const verifiedCount = subtitles.filter((s) => s.is_verified).length;
+  const allVerified = verifiedCount === subtitles.length;
+  const noneVerified = verifiedCount === 0;
+
+  const handleVerifyAll = () => {
+    subtitles.forEach((_, i) => setVerified(i, true));
+  };
+
+  const handleUnverifyAll = () => {
+    subtitles.forEach((_, i) => setVerified(i, false));
+  };
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* header */}
       <div
-        className="flex items-center px-5 py-2.5 border-b border-[var(--border)] flex-shrink-0"
+        className="flex items-center px-5 py-2.5 border-b border-[var(--border)] flex-shrink-0 gap-3"
         style={{ background: "var(--surface2)" }}
       >
         <span className="text-xs font-semibold text-[var(--text-2)] uppercase tracking-wider">
           字幕列表
         </span>
-        <span className="ml-auto text-xs text-[var(--text-3)]">
+
+        <span className="text-xs text-[var(--text-3)]">
           <span className="text-green-600 font-semibold">{verifiedCount}</span>
           {" / "}
           {subtitles.length} 已校验
         </span>
+
+        <div className="ml-auto flex items-center gap-2">
+          {/* Unverify all — only show when something is verified */}
+          {!noneVerified && (
+            <Tooltip title="取消全部校验">
+              <Button
+                size="small"
+                icon={<BorderOutlined />}
+                onClick={handleUnverifyAll}
+                className="!text-xs !text-gray-500"
+              >
+                取消全选
+              </Button>
+            </Tooltip>
+          )}
+
+          {/* Verify all — only show when not all verified */}
+          {!allVerified && (
+            <Tooltip title="将所有字幕标记为已校验">
+              <Button
+                size="small"
+                type="primary"
+                icon={<CheckSquareOutlined />}
+                onClick={handleVerifyAll}
+                className="!text-xs"
+              >
+                一键校验
+              </Button>
+            </Tooltip>
+          )}
+        </div>
       </div>
 
       {/* column headers */}
@@ -135,23 +185,26 @@ export function SubtitleList() {
               key={sub.id}
               ref={isActive ? activeRowRef : null}
               className={clsx(
-                "grid border-b transition-colors cursor-pointer",
+                "grid border-b transition-colors",
                 "border-[var(--border)]",
                 isActive && "bg-[var(--accent-light)]",
                 isVerified && !isActive && "bg-[var(--verified-bg)]",
                 !isActive && !isVerified && "bg-white hover:bg-slate-50"
               )}
               style={{ gridTemplateColumns: "40px 1fr 136px 136px 40px" }}
-              onClick={() => setActiveIdx(i)}
             >
-              {/* seq */}
-              <div className={clsx(
-                "flex items-center justify-center text-xs py-2",
-                "border-r border-[var(--border)]",
-                isActive && "text-blue-600 font-bold",
-                isVerified && !isActive && "text-green-600 font-bold",
-                !isActive && !isVerified && "text-[var(--text-3)]"
-              )}>
+              {/* seq — click activates row AND syncs waveform */}
+              <div
+                className={clsx(
+                  "flex items-center justify-center text-xs py-2",
+                  "border-r border-[var(--border)] cursor-pointer",
+                  "hover:bg-blue-50 transition-colors",
+                  isActive && "text-blue-600 font-bold",
+                  isVerified && !isActive && "text-green-600 font-bold",
+                  !isActive && !isVerified && "text-[var(--text-3)]"
+                )}
+                onClick={(e) => handleSeqClick(e, i)}
+              >
                 {isVerified
                   ? <CheckCircleFilled className="text-green-500 text-xs" />
                   : i + 1
@@ -159,10 +212,13 @@ export function SubtitleList() {
               </div>
 
               {/* text */}
-              <div className="border-r border-[var(--border)] px-3 py-2">
+              <div
+                className="border-r border-[var(--border)] px-3 py-2 cursor-pointer"
+                onClick={() => setActiveIdx(i)}
+              >
                 <textarea
                   className="w-full bg-transparent border-none text-sm text-[var(--text)]
-                             resize-none outline-none leading-relaxed"
+                             resize-none outline-none leading-relaxed cursor-text"
                   rows={2}
                   value={sub.text}
                   onChange={(e) => updateSubtitleText(i, e.target.value)}
@@ -170,8 +226,11 @@ export function SubtitleList() {
                 />
               </div>
 
-              {/* start_time — ± buttons on sides */}
-              <div className="border-r border-[var(--border)] flex items-center" onClick={(e) => e.stopPropagation()}>
+              {/* start_time */}
+              <div
+                className="border-r border-[var(--border)] flex items-center"
+                onClick={(e) => e.stopPropagation()}
+              >
                 <TimeCell
                   value={sub.start_time}
                   active={isActive}
@@ -183,7 +242,10 @@ export function SubtitleList() {
               </div>
 
               {/* end_time */}
-              <div className="border-r border-[var(--border)] flex items-center" onClick={(e) => e.stopPropagation()}>
+              <div
+                className="border-r border-[var(--border)] flex items-center"
+                onClick={(e) => e.stopPropagation()}
+              >
                 <TimeCell
                   value={sub.end_time}
                   active={isActive}
@@ -195,7 +257,10 @@ export function SubtitleList() {
               </div>
 
               {/* verified */}
-              <div className="flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+              <div
+                className="flex items-center justify-center"
+                onClick={(e) => e.stopPropagation()}
+              >
                 <Checkbox
                   checked={sub.is_verified}
                   onChange={(e) => setVerified(i, e.target.checked)}

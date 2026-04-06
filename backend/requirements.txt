@@ -24,6 +24,8 @@ faster-whisper==1.1.1        # CTranslate2-based Whisper, 4x faster than openai-
 # Apple Silicon: device="cpu", compute_type="int8"（MPS 暂不被 CTranslate2 支持）
 mlx-whisper==0.4.3
 
+stable-ts==2.19.1
+
 # silero-vad 依赖 torch，Apple Silicon 装 CPU 版即可（速度足够）
 # 安装顺序：先装 torch，再装 silero-vad
 # pip install torch==2.3.1 --index-url https://download.pytorch.org/whl/cpu
