@@ -20,6 +20,9 @@ pub struct StreamSource {
     pub sample_rate: u32,
     pub channels: u32,
     pub duration_secs: f64,
+    /// Original sample bit depth (e.g. 16 / 24 / 32 for PCM/FLAC). `None` if
+    /// the demuxer didn't carry it (some lossy codecs).
+    pub bits_per_sample: Option<u32>,
 }
 
 impl StreamSource {
@@ -55,6 +58,7 @@ impl StreamSource {
             .channels
             .map(|c| c.count() as u32)
             .unwrap_or(2);
+        let bits_per_sample = track.codec_params.bits_per_sample;
 
         let duration_secs = if let (Some(n_frames), Some(tb)) =
             (track.codec_params.n_frames, track.codec_params.time_base)
@@ -77,6 +81,7 @@ impl StreamSource {
             sample_rate,
             channels,
             duration_secs,
+            bits_per_sample,
         })
     }
 

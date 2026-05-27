@@ -1,5 +1,5 @@
 use crate::audio::spectrum::SPECTRUM_BARS;
-use crate::metadata::reader::{read_metadata, TrackMetadata};
+use crate::metadata::reader::{read_metadata, read_tags_light, TrackMetadata};
 use crate::AppState;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -13,6 +13,12 @@ const AUDIO_EXTS: &[&str] = &[
 pub struct TrackInfo {
     pub metadata: TrackMetadata,
     pub duration_secs: f64,
+    pub source_sample_rate: u32,
+    pub source_channels: u32,
+    pub source_bits_per_sample: Option<u32>,
+    pub output_sample_rate: u32,
+    pub output_channels: u32,
+    pub bit_perfect: bool,
 }
 
 #[derive(Serialize)]
@@ -27,6 +33,8 @@ pub struct PlayerStateInfo {
 pub struct ScannedTrack {
     pub path: String,
     pub name: String,
+    pub title: Option<String>,
+    pub artist: Option<String>,
 }
 
 #[tauri::command]
@@ -39,10 +47,15 @@ pub async fn open_file(path: String, state: State<'_, AppState>) -> Result<Track
     player
         .load_and_play(&path)
         .map_err(|e| format!("Load error: {}", e))?;
-    let duration_secs = player.get_duration();
     Ok(TrackInfo {
         metadata,
-        duration_secs,
+        duration_secs: player.get_duration(),
+        source_sample_rate: player.source_sample_rate(),
+        source_channels: player.source_channels(),
+        source_bits_per_sample: player.source_bits_per_sample(),
+        output_sample_rate: player.sample_rate(),
+        output_channels: player.output_channels(),
+        bit_perfect: player.bit_perfect(),
     })
 }
 
@@ -137,10 +150,13 @@ pub async fn scan_folder(path: String) -> Result<Vec<ScannedTrack>, String> {
             if !ext_ok {
                 continue;
             }
+            let (title, artist) = read_tags_light(&p);
             let path_str = p.to_string_lossy().to_string();
             out.push(ScannedTrack {
                 path: path_str,
                 name,
+                title,
+                artist,
             });
         }
     }

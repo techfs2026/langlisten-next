@@ -95,12 +95,118 @@ button > * {
   opacity: 0.4;
   cursor: not-allowed;
 }
+.pl-indicator-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
 #pl-indicator {
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--accent2);
   letter-spacing: 0.6px;
-  padding: 0 4px;
+  padding: 4px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 0.5px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+#pl-indicator:hover {
+  background: rgba(232, 217, 184, 0.06);
+  border-color: var(--border-dark);
+  color: var(--accent);
+}
+#pl-indicator.open {
+  background: rgba(232, 217, 184, 0.1);
+  border-color: var(--border-dark);
+  color: var(--accent);
+}
+#pl-indicator svg {
+  transition: transform 0.15s;
+}
+#pl-indicator.open svg {
+  transform: rotate(180deg);
+}
+.pl-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 320px;
+  max-height: 360px;
+  overflow-y: auto;
+  background: #2a1f17;
+  border: 0.5px solid #1a120c;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  z-index: 30;
+  padding: 4px;
+}
+.pl-dropdown::-webkit-scrollbar {
+  width: 6px;
+}
+.pl-dropdown::-webkit-scrollbar-thumb {
+  background: var(--border-dark);
+  border-radius: 3px;
+}
+.pl-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  padding: 7px 10px;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-mono);
+  color: var(--text-light);
+  transition: background 0.1s, color 0.1s;
+}
+.pl-item:hover {
+  background: rgba(232, 217, 184, 0.06);
+  color: var(--text-bright);
+}
+.pl-item.active {
+  background: rgba(201, 123, 90, 0.18);
+  color: var(--accent);
+}
+.pl-item-num {
+  font-size: 10px;
+  color: var(--text-mid);
+  letter-spacing: 0.6px;
+  min-width: 22px;
+  flex-shrink: 0;
+}
+.pl-item.active .pl-item-num {
+  color: var(--accent2);
+}
+.pl-item-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+}
+.pl-item-title {
+  font-size: 12px;
+  letter-spacing: 0.3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pl-item-artist {
+  font-size: 10px;
+  color: var(--text-mid);
+  letter-spacing: 0.4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ── MAIN STAGE ──────────────────────────────────────────────────── */

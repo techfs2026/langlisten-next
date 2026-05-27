@@ -3,14 +3,16 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import Cassette from "./components/Cassette";
 import SpectrumGL from "./components/SpectrumGL";
 import Icon from "./components/Icon";
-import { api, ScannedTrack, TrackMetadata } from "./lib/api";
+import { api, ScannedTrack, TrackInfo, TrackMetadata } from "./lib/api";
 import { fmtTime, parseName } from "./lib/utils";
 
 interface PlaylistItem {
   path: string;
   name: string;
-  fallbackTitle: string;
-  fallbackArtist: string;
+  /** Title: tag value if known, else parsed from filename. Always non-empty. */
+  title: string;
+  /** Artist: tag value if known, else parsed; null when neither source has one. */
+  artist: string | null;
 }
 
 const AUDIO_EXTS = /\.(mp3|m4a|ogg|wav|flac|aac|opus|weba|webm)$/i;
@@ -22,6 +24,14 @@ export default function App() {
   const [plIndex, setPlIndex] = useState(0);
 
   const [metadata, setMetadata] = useState<TrackMetadata | null>(null);
+  const [format, setFormat] = useState<{
+    sourceSr: number;
+    sourceCh: number;
+    sourceBits: number | null;
+    outputSr: number;
+    outputCh: number;
+    bitPerfect: boolean;
+  } | null>(null);
   const [duration, setDuration] = useState(0);
   const [position, setPosition] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -45,12 +55,25 @@ export default function App() {
   const seekDragRef = useRef(false);
   const [seekValue, setSeekValue] = useState(0);
 
+  const [showPlaylist, setShowPlaylist] = useState(false);
+  const playlistWrapRef = useRef<HTMLDivElement | null>(null);
+  const playlistRef = useRef<PlaylistItem[]>([]);
+  const plIndexRef = useRef(0);
+  const wasPlayingRef = useRef(false);
+
+  useEffect(() => {
+    playlistRef.current = playlist;
+  }, [playlist]);
+  useEffect(() => {
+    plIndexRef.current = plIndex;
+  }, [plIndex]);
+
   const currentTrack = playlist[plIndex];
 
   const display = useMemo(() => {
     if (!currentTrack) return { title: "", artist: "" };
-    const t = metadata?.title?.trim() || currentTrack.fallbackTitle;
-    const a = metadata?.artist?.trim() || currentTrack.fallbackArtist;
+    const t = metadata?.title?.trim() || currentTrack.title;
+    const a = metadata?.artist?.trim() || currentTrack.artist || "";
     return { title: t, artist: a };
   }, [metadata, currentTrack]);
 
@@ -71,12 +94,12 @@ export default function App() {
   // Real dB readout: backend maps -90..0 dBFS into bars[i] in [0,1].
   // We take the peak bar as the loudest band, convert back to dB.
   const dbReadout = useMemo(() => {
-    if (!playing) return "— dB";
+    if (!playing) return "PEAK — dB";
     let peak = 0;
     for (const b of bars) if (b > peak) peak = b;
-    if (peak < 0.01) return "—∞ dB";
+    if (peak < 0.01) return "PEAK −∞ dB";
     const db = -90 + peak * 90; // inverse of backend map
-    return `${db.toFixed(0)} dB`;
+    return `PEAK ${db.toFixed(0)} dB`;
   }, [bars, playing]);
 
   // ── Track loading (ref-stored so closures over playlist stay fresh) ──────
@@ -98,9 +121,17 @@ export default function App() {
       const t = useList[safe];
       setError(null);
       try {
-        const info = await api.openFile(t.path);
+        const info: TrackInfo = await api.openFile(t.path);
         setMetadata(info.metadata);
         setDuration(info.duration_secs);
+        setFormat({
+          sourceSr: info.source_sample_rate,
+          sourceCh: info.source_channels,
+          sourceBits: info.source_bits_per_sample,
+          outputSr: info.output_sample_rate,
+          outputCh: info.output_channels,
+          bitPerfect: info.bit_perfect,
+        });
         setPosition(0);
         setSeekValue(0);
         setPlaying(true);
@@ -115,12 +146,25 @@ export default function App() {
     const id = window.setInterval(async () => {
       try {
         const s = await api.getState();
+        const isPlaying = s.state === "playing";
         setPosition(s.position_secs);
         setDuration((d) => (s.duration_secs > 0 ? s.duration_secs : d));
-        setPlaying(s.state === "playing");
+        setPlaying(isPlaying);
         if (!seekDragRef.current && s.duration_secs > 0) {
           setSeekValue(Math.floor((s.position_secs / s.duration_secs) * 1000));
         }
+        // Auto-advance: track was playing, has now stopped near the end → next.
+        // List loops because loadAt wraps the index modulo playlist length.
+        if (
+          wasPlayingRef.current &&
+          !isPlaying &&
+          s.duration_secs > 0 &&
+          s.position_secs >= s.duration_secs - 0.6 &&
+          playlistRef.current.length > 0
+        ) {
+          loadAtRef.current(plIndexRef.current + 1);
+        }
+        wasPlayingRef.current = isPlaying;
       } catch { }
     }, STATE_POLL_MS);
     return () => window.clearInterval(id);
@@ -153,8 +197,8 @@ export default function App() {
         .filter((p) => AUDIO_EXTS.test(p))
         .map((p) => {
           const name = p.split(/[\\/]/).pop() || p;
-          const { title, artist } = parseName(name);
-          return { path: p, name, fallbackTitle: title, fallbackArtist: artist };
+          const parsed = parseName(name);
+          return { path: p, name, title: parsed.title, artist: parsed.artist };
         });
       if (!items.length) {
         setError("没有找到音频文件");
@@ -183,12 +227,14 @@ export default function App() {
         return;
       }
       const items: PlaylistItem[] = tracks.map((t) => {
-        const { title, artist } = parseName(t.name);
+        const parsed = parseName(t.name);
+        const tagTitle = t.title?.trim();
+        const tagArtist = t.artist?.trim();
         return {
           path: t.path,
           name: t.name,
-          fallbackTitle: title,
-          fallbackArtist: artist,
+          title: tagTitle || parsed.title,
+          artist: tagArtist || parsed.artist,
         };
       });
       const total = items.length;
@@ -262,6 +308,26 @@ export default function App() {
   const fmtHz = (hz: number) =>
     hz >= 1000 ? `${(hz / 1000).toFixed(hz >= 10000 ? 0 : 1)}kHz` : `${Math.round(hz)}Hz`;
 
+  // Close the playlist dropdown when clicking outside of it.
+  useEffect(() => {
+    if (!showPlaylist) return;
+    const onDown = (e: MouseEvent) => {
+      if (
+        playlistWrapRef.current &&
+        !playlistWrapRef.current.contains(e.target as Node)
+      ) {
+        setShowPlaylist(false);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [showPlaylist]);
+
+  const handlePickTrack = useCallback((idx: number) => {
+    setShowPlaylist(false);
+    loadAtRef.current(idx);
+  }, []);
+
 
   return (
     <div id="app">
@@ -271,9 +337,40 @@ export default function App() {
         <span className="ver">v0.1</span>
         <div style={{ flex: 1 }} />
         {playlist.length > 0 && (
-          <span id="pl-indicator">
-            {plIndex + 1}/{playlist.length}
-          </span>
+          <div className="pl-indicator-wrap" ref={playlistWrapRef}>
+            <button
+              id="pl-indicator"
+              className={showPlaylist ? "open" : ""}
+              onClick={() => setShowPlaylist((v) => !v)}
+              title="切换播放列表"
+            >
+              {plIndex + 1}/{playlist.length}
+              <Icon name="chevron-down" size={11} />
+            </button>
+            {showPlaylist && (
+              <div className="pl-dropdown" role="listbox">
+                {playlist.map((item, idx) => (
+                  <button
+                    key={`${item.path}-${idx}`}
+                    className={`pl-item${idx === plIndex ? " active" : ""}`}
+                    onClick={() => handlePickTrack(idx)}
+                  >
+                    <span className="pl-item-num">
+                      {String(idx + 1).padStart(2, "0")}
+                    </span>
+                    <span className="pl-item-text">
+                      <span className="pl-item-title">
+                        {item.title || item.name}
+                      </span>
+                      {item.artist && (
+                        <span className="pl-item-artist">{item.artist}</span>
+                      )}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         )}
         <button className="top-btn" onClick={handleOpenFiles}>
           <Icon name="file-music" size={14} />
@@ -293,6 +390,11 @@ export default function App() {
           playing={playing}
           energy={energy}
           coverDataUrl={coverDataUrl}
+          sampleRateHz={format?.sourceSr ?? 0}
+          bitsPerSample={format?.sourceBits ?? null}
+          channelCount={format?.sourceCh ?? 0}
+          durationSecs={duration}
+          bitPerfect={format?.bitPerfect ?? null}
         />
 
         <div id="spectrum-area">

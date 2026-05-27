@@ -10,6 +10,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use super::decoder::StreamSource;
+use super::resampler::Resampler;
 use super::spectrum::SpectrumRing;
 
 /// Max queued PCM ahead of playback (~seconds * sr * channels, capped).
@@ -22,6 +23,98 @@ const PREROLL_WAIT_ITERATIONS: u32 = 600;
 enum DecodeCmd {
     Stop,
     Seek(f64),
+}
+
+/// Pick the cpal stream config we'll actually run.
+///
+/// Returns `(config, bit_perfect)`. `bit_perfect = true` means the stream
+/// runs at exactly the source's rate AND channel count, so no resampling
+/// or channel remapping happens before output. Otherwise we hand the source
+/// to the linear resampler and use the device's default config.
+///
+/// We *probe* by actually trying to build a no-op stream at the source's
+/// format. `supported_output_configs()` on macOS often only lists the rate
+/// the device is currently set to, so trusting it would force resampling
+/// even when the hardware can switch (e.g. device set to 44.1 kHz, file is
+/// 48 kHz — both are universally supported). cpal returns `Err` from
+/// `build_output_stream` for configs the hardware truly can't accept, so
+/// "build succeeds" is a much more reliable signal.
+fn pick_stream_config(
+    device: &cpal::Device,
+    source_sr: u32,
+    source_ch: usize,
+) -> Result<(StreamConfig, bool)> {
+    #[allow(deprecated)]
+    let device_name = device.name().ok();
+    log::info!(
+        "Audio: source {} Hz / {} ch on device {:?}",
+        source_sr,
+        source_ch,
+        device_name
+    );
+    if let Ok(iter) = device.supported_output_configs() {
+        for c in iter {
+            log::info!(
+                "  cpal-reported config: ch={}, sr={:?}..={:?}, fmt={:?}",
+                c.channels(),
+                c.min_sample_rate(),
+                c.max_sample_rate(),
+                c.sample_format()
+            );
+        }
+    }
+    if let Ok(d) = device.default_output_config() {
+        log::info!(
+            "  device default: ch={}, sr={:?}, fmt={:?}",
+            d.channels(),
+            d.sample_rate(),
+            d.sample_format()
+        );
+    }
+
+    let preferred = StreamConfig {
+        channels: source_ch as u16,
+        sample_rate: source_sr,
+        buffer_size: cpal::BufferSize::Default,
+    };
+
+    // Probe with an empty callback; discard immediately if it builds.
+    let probe = device.build_output_stream(
+        &preferred,
+        |_: &mut [f32], _: &cpal::OutputCallbackInfo| {},
+        |err| log::warn!("Probe stream callback error: {}", err),
+        None,
+    );
+    match probe {
+        Ok(stream) => {
+            drop(stream);
+            log::info!(
+                "  → bit-perfect: cpal accepted {} Hz / {} ch",
+                source_sr,
+                source_ch
+            );
+            return Ok((preferred, true));
+        }
+        Err(e) => {
+            log::warn!(
+                "  → cpal rejected {} Hz / {} ch ({}); falling back",
+                source_sr,
+                source_ch,
+                e
+            );
+        }
+    }
+
+    let default_config: StreamConfig = device
+        .default_output_config()
+        .map_err(|e| anyhow!("No default output config: {e}"))?
+        .into();
+    log::info!(
+        "  → using default {} Hz / {} ch + resampler",
+        default_config.sample_rate,
+        default_config.channels
+    );
+    Ok((default_config, false))
 }
 
 /// Shared between cpal callback and decode thread.
@@ -42,6 +135,11 @@ pub struct AudioPlayer {
     stream_pair: Option<Arc<(Mutex<PlaybackState>, Condvar)>>,
     sample_rate: u32,
     duration_secs: f64,
+    source_sample_rate: u32,
+    source_channels: u32,
+    source_bits_per_sample: Option<u32>,
+    output_channels: u32,
+    bit_perfect: bool,
     position_secs: Arc<AtomicU64>,
     is_playing: Arc<AtomicBool>,
     decode_thread: Option<JoinHandle<()>>,
@@ -54,12 +152,14 @@ unsafe impl Send for AudioPlayer {}
 
 fn decode_loop(
     mut source: StreamSource,
+    mut resampler: Resampler,
     pair: Arc<(Mutex<PlaybackState>, Condvar)>,
     cmd_rx: crossbeam_channel::Receiver<DecodeCmd>,
     abort: Arc<AtomicBool>,
 ) {
     let (lock, cvar) = &*pair;
-    let mut scratch = Vec::with_capacity(16384);
+    let mut src_scratch = Vec::with_capacity(16384);
+    let mut out_scratch = Vec::with_capacity(16384);
 
     'outer: loop {
         if abort.load(Ordering::SeqCst) {
@@ -77,22 +177,29 @@ fn decode_loop(
                     if let Err(e) = source.seek_to_secs(secs) {
                         log::error!("Seek failed: {e}");
                     }
+                    resampler.reset();
                     cvar.notify_all();
                 }
             }
         }
 
-        match source.read_next_samples(&mut scratch) {
-            Ok(true) if !scratch.is_empty() => {
+        match source.read_next_samples(&mut src_scratch) {
+            Ok(true) if !src_scratch.is_empty() => {
+                out_scratch.clear();
+                resampler.process(&src_scratch, &mut out_scratch);
+                if out_scratch.is_empty() {
+                    continue;
+                }
                 let mut g = lock.lock();
-                while g.queue.len() + scratch.len() > g.max_samples && !abort.load(Ordering::SeqCst)
+                while g.queue.len() + out_scratch.len() > g.max_samples
+                    && !abort.load(Ordering::SeqCst)
                 {
                     cvar.wait(&mut g);
                 }
                 if abort.load(Ordering::SeqCst) {
                     break 'outer;
                 }
-                g.queue.extend(scratch.iter().copied());
+                g.queue.extend(out_scratch.iter().copied());
                 drop(g);
                 cvar.notify_all();
             }
@@ -137,6 +244,11 @@ impl AudioPlayer {
             stream_pair: None,
             sample_rate: 44100,
             duration_secs: 0.0,
+            source_sample_rate: 0,
+            source_channels: 0,
+            source_bits_per_sample: None,
+            output_channels: 0,
+            bit_perfect: false,
             position_secs: Arc::new(AtomicU64::new(0)),
             is_playing: Arc::new(AtomicBool::new(false)),
             decode_thread: None,
@@ -154,6 +266,26 @@ impl AudioPlayer {
         self.sample_rate
     }
 
+    pub fn source_sample_rate(&self) -> u32 {
+        self.source_sample_rate
+    }
+
+    pub fn source_channels(&self) -> u32 {
+        self.source_channels
+    }
+
+    pub fn output_channels(&self) -> u32 {
+        self.output_channels
+    }
+
+    pub fn bit_perfect(&self) -> bool {
+        self.bit_perfect
+    }
+
+    pub fn source_bits_per_sample(&self) -> Option<u32> {
+        self.source_bits_per_sample
+    }
+
     /// Load a file, pre-buffer, then start playback (decode continues in a background thread).
     // player.rs — 只替换这两个函数，其余不变
 
@@ -161,22 +293,62 @@ impl AudioPlayer {
         self.stop();
 
         let source = StreamSource::open(path)?;
-        self.sample_rate = source.sample_rate;
+        let source_sr = source.sample_rate;
+        let source_ch = source.channels as usize;
+        let source_bits = source.bits_per_sample;
         self.duration_secs = source.duration_secs;
-        let channels = source.channels as usize;
-        let sr = self.sample_rate;
-        let max_samples = ((sr as f64) * QUEUE_MAX_SECS * (channels as f64)).ceil() as usize;
+        self.source_bits_per_sample = source_bits;
+
+        // Bit-perfect first: ask cpal/CoreAudio to switch the device to the
+        // source's native rate + channels when supported, so the FLAC plays
+        // without any resampling. Only fall back to the device's default
+        // config (+ our linear resampler) when the hardware truly can't take
+        // the source format — that's the path that can't be bit-perfect.
+        let host = cpal::default_host();
+        let device = host
+            .default_output_device()
+            .ok_or_else(|| anyhow!("No output device"))?;
+        let (stream_config, bit_perfect) = pick_stream_config(&device, source_sr, source_ch)?;
+
+        let output_sr = stream_config.sample_rate;
+        let output_ch = stream_config.channels as usize;
+        self.sample_rate = output_sr;
+        self.source_sample_rate = source_sr;
+        self.source_channels = source_ch as u32;
+        self.output_channels = output_ch as u32;
+        self.bit_perfect = bit_perfect;
+
+        if bit_perfect {
+            log::info!(
+                "Bit-perfect: source {} Hz / {} ch matches device output",
+                source_sr,
+                source_ch
+            );
+        } else {
+            log::info!(
+                "Resampling: source {} Hz / {} ch → device {} Hz / {} ch",
+                source_sr,
+                source_ch,
+                output_sr,
+                output_ch
+            );
+        }
+
+        let resampler = Resampler::new(source_sr, source_ch, output_sr, output_ch);
+
+        let max_samples =
+            ((output_sr as f64) * QUEUE_MAX_SECS * (output_ch as f64)).ceil() as usize;
         let preroll_samples =
-            (((sr as f64) * PREROLL_SECS * (channels as f64)).ceil() as usize).max(2048);
+            (((output_sr as f64) * PREROLL_SECS * (output_ch as f64)).ceil() as usize).max(2048);
 
         let state = PlaybackState {
             queue: VecDeque::with_capacity(preroll_samples.min(max_samples)),
             max_samples,
             decode_finished: false,
-            channels,
+            channels: output_ch,
             paused: false,
             volume: 1.0,
-            chan_gather: Vec::with_capacity(channels),
+            chan_gather: Vec::with_capacity(output_ch),
         };
 
         let pair = Arc::new((Mutex::new(state), Condvar::new()));
@@ -186,7 +358,9 @@ impl AudioPlayer {
         let abort = Arc::clone(&self.decode_abort);
         let pair_thread = Arc::clone(&pair);
 
-        let handle = std::thread::spawn(move || decode_loop(source, pair_thread, cmd_rx, abort));
+        let handle = std::thread::spawn(move || {
+            decode_loop(source, resampler, pair_thread, cmd_rx, abort)
+        });
 
         self.decode_thread = Some(handle);
         self.decode_cmd = Some(cmd_tx);
@@ -214,7 +388,12 @@ impl AudioPlayer {
 
         self.spectrum_ring.clear();
 
-        let stream = match self.build_stream(Arc::clone(&pair), Arc::clone(&self.spectrum_ring)) {
+        let stream = match self.build_stream(
+            &device,
+            &stream_config,
+            Arc::clone(&pair),
+            Arc::clone(&self.spectrum_ring),
+        ) {
             Ok(s) => s,
             Err(e) => {
                 self.cleanup_decode_after_failed_output(&pair);
@@ -237,56 +416,18 @@ impl AudioPlayer {
 
     fn build_stream(
         &self,
+        device: &cpal::Device,
+        config: &StreamConfig,
         pair: Arc<(Mutex<PlaybackState>, Condvar)>,
         spectrum_ring: Arc<SpectrumRing>,
     ) -> Result<Stream> {
-        let host = cpal::default_host();
-        let device = host
-            .default_output_device()
-            .ok_or_else(|| anyhow!("No output device"))?;
-
-        let channels = {
-            let g = pair.0.lock();
-            g.channels as u16
-        };
-        let sr = self.sample_rate; // u32
-
-        // 0.17: SampleRate 就是 u32，直接比较，无需 .0
-        let config: StreamConfig = {
-            let supported = device
-                .supported_output_configs()
-                .map(|iter| {
-                    iter.filter(|c| c.channels() == channels)
-                        .any(|c| c.min_sample_rate() <= sr && c.max_sample_rate() >= sr)
-                })
-                .unwrap_or(false);
-
-            if supported {
-                StreamConfig {
-                    channels,
-                    sample_rate: sr, // 0.17: 直接用 u32，不需要 SampleRate(sr)
-                    buffer_size: cpal::BufferSize::Default,
-                }
-            } else {
-                log::warn!(
-                    "Output device does not support sr={sr} ch={channels}; \
-                     falling back to device default config"
-                );
-                device
-                    .default_output_config()
-                    .map_err(|e| anyhow!("No default output config: {e}"))?
-                    .into()
-            }
-        };
-
         let position_secs = Arc::clone(&self.position_secs);
         let is_playing = Arc::clone(&self.is_playing);
-        // 0.17: config.sample_rate 就是 u32，直接 as f64
         let sample_rate_f = config.sample_rate as f64;
         let config_channels = config.channels as usize;
 
         let stream = device.build_output_stream(
-            &config,
+            config,
             move |output: &mut [f32], _| {
                 let (lock, cvar) = &*pair;
                 let mut s = lock.lock();

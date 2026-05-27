@@ -11,6 +11,12 @@ export interface TrackMetadata {
 export interface TrackInfo {
   metadata: TrackMetadata;
   duration_secs: number;
+  source_sample_rate: number;
+  source_channels: number;
+  source_bits_per_sample: number | null;
+  output_sample_rate: number;
+  output_channels: number;
+  bit_perfect: boolean;
 }
 
 export interface PlayerStateInfo {
@@ -23,6 +29,8 @@ export interface PlayerStateInfo {
 export interface ScannedTrack {
   path: string;
   name: string;
+  title: string | null;
+  artist: string | null;
 }
 
 export interface SpectrumConfig {

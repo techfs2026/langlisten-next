@@ -16,6 +16,29 @@ pub struct TrackMetadata {
     pub cover_mime: Option<String>,
 }
 
+/// Lightweight tag read used during folder scans: title + artist only,
+/// no cover decoding (covers can be megabytes and would blow the IPC payload
+/// for a folder of 100+ tracks). Soft-fails to `(None, None)` on any error.
+pub fn read_tags_light(path: &Path) -> (Option<String>, Option<String>) {
+    let tagged = match lofty::read_from_path(path) {
+        Ok(t) => t,
+        Err(_) => return (None, None),
+    };
+    let tag = match tagged.primary_tag().or_else(|| tagged.first_tag()) {
+        Some(t) => t,
+        None => return (None, None),
+    };
+    let title = tag
+        .title()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let artist = tag
+        .artist()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    (title, artist)
+}
+
 /// Read tag metadata. Soft-fails: if the file can't be parsed for *any* reason
 /// (corrupt FLAC header, ID3 issues, unsupported container, etc.), an empty
 /// `TrackMetadata` is returned. We never want a bad tag to block playback —

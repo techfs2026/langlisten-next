@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { trim } from "../lib/utils";
+import { fmtChannels, fmtSampleRateKHz, fmtTime, trim } from "../lib/utils";
 
 interface Props {
   title: string;
@@ -9,6 +9,16 @@ interface Props {
   energy: number;
   /** base64 data url for cover, or null. Tints the cassette shell. */
   coverDataUrl: string | null;
+  /** Source-file sample rate in Hz; 0 = no track loaded. */
+  sampleRateHz: number;
+  /** Source-file bit depth (16/24/32); null if the codec doesn't carry it. */
+  bitsPerSample: number | null;
+  /** Source-file channel count. */
+  channelCount: number;
+  /** Source-file duration in seconds. */
+  durationSecs: number;
+  /** Whether playback is going to the device at the source's native rate/channels. null = no track. */
+  bitPerfect: boolean | null;
 }
 
 /**
@@ -28,6 +38,11 @@ export default function Cassette({
   playing,
   energy,
   coverDataUrl,
+  sampleRateHz,
+  bitsPerSample,
+  channelCount,
+  durationSecs,
+  bitPerfect,
 }: Props) {
   const reelLRef = useRef<SVGGElement>(null);
   const reelRRef = useRef<SVGGElement>(null);
@@ -60,6 +75,19 @@ export default function Cassette({
   const ledColor = playing ? "#c97b5a" : "#5a4838";
   const safeTitle = title ? trim(title, 40).toUpperCase() : "— —";
   const safeArtist = artist ? trim(artist, 56).toUpperCase() : "NO SIGNAL";
+
+  // Real format readouts replace the iconic-but-fake "HIGH BIAS · 90" /
+  // "CrO₂ · NORMAL" / "DOLBY NR · B" / "45 + 45 MIN" cassette labels.
+  const hasTrack = sampleRateHz > 0;
+  const rateLabel = hasTrack
+    ? (bitsPerSample
+        ? `${fmtSampleRateKHz(sampleRateHz)} · ${bitsPerSample} BIT`
+        : fmtSampleRateKHz(sampleRateHz))
+    : "— kHz";
+  const channelLabel = channelCount > 0 ? fmtChannels(channelCount) : "—";
+  const modeLabel =
+    bitPerfect == null ? "—" : bitPerfect ? "BIT-PERFECT" : "RESAMPLED";
+  const durationLabel = durationSecs > 0 ? fmtTime(durationSecs) : "—:—";
 
   // Reel hub spokes — 8 evenly spaced ridges (drawn once, reused per reel).
   const HUB_SPOKES = Array.from({ length: 8 }, (_, i) => (i * 360) / 8);
@@ -241,7 +269,7 @@ export default function Cassette({
             fontFamily: "var(--font-mono)",
           }}
         >
-          HIGH BIAS · 90
+          {rateLabel.toUpperCase()}
         </text>
 
         {/* ── PAPER LABEL ───────────────────────────────────────────────── */}
@@ -328,19 +356,20 @@ export default function Cassette({
             SIDE A
           </text>
 
-          {/* CrO₂ marker */}
+          {/* Playback mode — BIT-PERFECT vs RESAMPLED. */}
           <text
             x="928"
             y="104"
             textAnchor="end"
-            fill="#8a7958"
+            fill={bitPerfect ? "#c97b5a" : "#8a7958"}
             style={{
               fontSize: 13,
+              fontWeight: bitPerfect ? 600 : 400,
               letterSpacing: "2px",
               fontFamily: "var(--font-mono)",
             }}
           >
-            CrO₂ · NORMAL
+            {modeLabel}
           </text>
 
           {/* Title */}
@@ -385,7 +414,7 @@ export default function Cassette({
             {safeArtist}
           </text>
 
-          {/* Bottom-left small specs */}
+          {/* Channel layout (left) + track duration (right). */}
           <text
             x="80"
             y="236"
@@ -396,7 +425,7 @@ export default function Cassette({
               fontFamily: "var(--font-mono)",
             }}
           >
-            DOLBY NR · B
+            {channelLabel}
           </text>
           <text
             x="924"
@@ -409,7 +438,7 @@ export default function Cassette({
               fontFamily: "var(--font-mono)",
             }}
           >
-            45 + 45 MIN
+            {durationLabel}
           </text>
         </g>
 
