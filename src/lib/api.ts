@@ -20,7 +20,7 @@ export interface TrackInfo {
 }
 
 export interface PlayerStateInfo {
-  state: string; // "playing" | "paused" | "idle"
+  state: string; // "playing" | "paused" | "idle" | "ended"
   position_secs: number;
   duration_secs: number;
   volume: number;
@@ -31,6 +31,8 @@ export interface ScannedTrack {
   name: string;
   title: string | null;
   artist: string | null;
+  /** Album group label: CUE album title, else the containing folder name. */
+  album: string | null;
   /** CUE track start within the file, in seconds. null for a whole file. */
   start_secs: number | null;
   /** CUE track end within the file, in seconds. null = play to EOF. */

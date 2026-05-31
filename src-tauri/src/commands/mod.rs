@@ -11,6 +11,16 @@ const AUDIO_EXTS: &[&str] = &[
     "mp3", "m4a", "ogg", "wav", "flac", "aac", "opus", "weba", "webm",
 ];
 
+/// Name of the folder directly containing `file_path`, used as the album group
+/// label when no better title is available.
+fn folder_name(file_path: &Path) -> Option<String> {
+    file_path
+        .parent()
+        .and_then(|d| d.file_name())
+        .and_then(|n| n.to_str())
+        .map(|s| s.to_string())
+}
+
 #[derive(Serialize)]
 pub struct TrackInfo {
     pub metadata: TrackMetadata,
@@ -37,6 +47,9 @@ pub struct ScannedTrack {
     pub name: String,
     pub title: Option<String>,
     pub artist: Option<String>,
+    /// Album display label used to group the playlist: the CUE sheet's album
+    /// title, otherwise the track's containing folder name.
+    pub album: Option<String>,
     /// CUE track start within the file, in seconds. `None` for a whole file.
     pub start_secs: Option<f64>,
     /// CUE track end within the file, in seconds. `None` = play to EOF (whole
@@ -135,8 +148,16 @@ pub fn get_spectrum(state: State<'_, AppState>) -> Vec<f32> {
     bars.to_vec()
 }
 
-/// Recursively scan a directory for audio files. Returns a flat, name-sorted list.
-/// Path is returned as a string for easy use over the IPC boundary.
+/// How many directory levels below the selected folder we descend into.
+/// The selected folder is depth 0. A typical library is at most two layers
+/// (parent → album → files), so 2 covers "pick the parent" plus a little slack
+/// for multi-disc albums (album → Disc 1 → files), while still preventing a
+/// stray pick of a huge directory from scanning an entire drive.
+const MAX_SCAN_DEPTH: usize = 2;
+
+/// Recursively scan a directory (up to [`MAX_SCAN_DEPTH`] levels deep) for audio
+/// files and CUE sheets. Returns a flat list, folder-grouped then ordered by
+/// filename / CUE track number. Paths are strings for easy use over IPC.
 #[tauri::command]
 pub async fn scan_folder(path: String) -> Result<Vec<ScannedTrack>, String> {
     let root = PathBuf::from(&path);
@@ -146,9 +167,9 @@ pub async fn scan_folder(path: String) -> Result<Vec<ScannedTrack>, String> {
 
     let mut audio_files: Vec<PathBuf> = Vec::new();
     let mut cue_files: Vec<PathBuf> = Vec::new();
-    let mut stack: Vec<PathBuf> = vec![root];
+    let mut stack: Vec<(PathBuf, usize)> = vec![(root, 0)];
 
-    while let Some(dir) = stack.pop() {
+    while let Some((dir, depth)) = stack.pop() {
         let entries = match std::fs::read_dir(&dir) {
             Ok(e) => e,
             Err(e) => {
@@ -159,7 +180,9 @@ pub async fn scan_folder(path: String) -> Result<Vec<ScannedTrack>, String> {
         for entry in entries.flatten() {
             let p = entry.path();
             if p.is_dir() {
-                stack.push(p);
+                if depth < MAX_SCAN_DEPTH {
+                    stack.push((p, depth + 1));
+                }
                 continue;
             }
             match p.file_name().and_then(|n| n.to_str()) {
@@ -195,6 +218,11 @@ pub async fn scan_folder(path: String) -> Result<Vec<ScannedTrack>, String> {
         let audio_path_str = sheet.audio_path.to_string_lossy().to_string();
         referenced.insert(audio_path_str.to_ascii_lowercase());
         let sort_base = audio_path_str.to_ascii_lowercase();
+        // Group label: CUE album title, else the containing folder name.
+        let album = sheet
+            .album
+            .clone()
+            .or_else(|| folder_name(&sheet.audio_path));
         for t in &sheet.tracks {
             let title = t.title.clone().or_else(|| sheet.album.clone());
             let artist = t.performer.clone().or_else(|| sheet.album_performer.clone());
@@ -211,6 +239,7 @@ pub async fn scan_folder(path: String) -> Result<Vec<ScannedTrack>, String> {
                     name,
                     title,
                     artist,
+                    album: album.clone(),
                     start_secs: Some(t.start_secs),
                     end_secs: t.end_secs,
                 },
@@ -237,6 +266,7 @@ pub async fn scan_folder(path: String) -> Result<Vec<ScannedTrack>, String> {
                 name,
                 title,
                 artist,
+                album: folder_name(p),
                 start_secs: None,
                 end_secs: None,
             },

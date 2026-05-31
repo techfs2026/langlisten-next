@@ -208,6 +208,69 @@ button > * {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.pl-album {
+  display: flex;
+  flex-direction: column;
+}
+.pl-album-header {
+  position: sticky;
+  top: -4px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  background: #2a1f17;
+  border: none;
+  border-bottom: 0.5px solid var(--border-dark);
+  border-radius: 4px;
+  margin: 4px 0 2px;
+  padding: 6px 10px;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text-mid);
+  transition: background 0.1s, color 0.1s;
+}
+.pl-album:first-child .pl-album-header {
+  margin-top: 0;
+}
+.pl-album-header:hover {
+  background: rgba(232, 217, 184, 0.06);
+  color: var(--text-bright);
+}
+.pl-album-header.current {
+  color: var(--accent2);
+}
+.pl-album-header svg {
+  flex-shrink: 0;
+  transform: rotate(-90deg);
+  transition: transform 0.15s ease;
+}
+.pl-album-header.open svg {
+  transform: rotate(0deg);
+}
+.pl-album-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pl-album-count {
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 400;
+  letter-spacing: 0.5px;
+  color: var(--text-mid);
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 8px;
+  padding: 1px 7px;
+}
 
 /* ── MAIN STAGE ──────────────────────────────────────────────────── */
 #main-window {

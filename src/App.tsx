@@ -22,6 +22,8 @@ interface PlaylistItem {
   title: string;
   /** Artist: tag value if known, else parsed; null when neither source has one. */
   artist: string | null;
+  /** Album group label (CUE album title or folder name); for the dropdown. */
+  album: string | null;
   /** CUE track start within the file (secs); null for a standalone file. */
   startSecs: number | null;
   /** CUE track end within the file (secs); null = play to EOF. */
@@ -67,7 +69,9 @@ export default function App() {
   const playlistWrapRef = useRef<HTMLDivElement | null>(null);
   const playlistRef = useRef<PlaylistItem[]>([]);
   const plIndexRef = useRef(0);
-  const wasPlayingRef = useRef(false);
+  // Guards against firing auto-advance repeatedly while the backend still
+  // reports "ended" (until the next track loads and flips it back to "playing").
+  const endedHandledRef = useRef(false);
 
   // Lyrics + view toggle. `userPickedView` is true once the user has manually
   // toggled in this session — until then we auto-select based on whether the
@@ -106,6 +110,58 @@ export default function App() {
     for (const b of bars) sum += b;
     return Math.min(1, sum / bars.length);
   }, [bars]);
+
+  // Album grouping for the playlist dropdown. The scan already returns tracks
+  // grouped by folder, so we just split on folder boundaries into a 2-level
+  // (album → tracks) structure. Each track keeps its flat playlist index, so
+  // playback/selection logic is unchanged — this is purely presentational.
+  const dirOf = (p: string) =>
+    p.slice(0, Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\")));
+  const albums = useMemo(() => {
+    const out: {
+      dir: string;
+      label: string;
+      tracks: { idx: number; item: PlaylistItem }[];
+    }[] = [];
+    playlist.forEach((item, idx) => {
+      const dir = dirOf(item.path);
+      const last = out[out.length - 1];
+      if (last && last.dir === dir) {
+        last.tracks.push({ idx, item });
+      } else {
+        out.push({
+          dir,
+          label: item.album || dir.split(/[/\\]/).pop() || "未知专辑",
+          tracks: [{ idx, item }],
+        });
+      }
+    });
+    return out;
+  }, [playlist]);
+
+  const currentDir = currentTrack ? dirOf(currentTrack.path) : null;
+  // Which album sections are expanded. Default-expand the playing album.
+  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
+  const currentAlbumRef = useRef<HTMLDivElement | null>(null);
+
+  const toggleAlbum = useCallback((dir: string) => {
+    setExpandedDirs((prev) => {
+      const next = new Set(prev);
+      if (next.has(dir)) next.delete(dir);
+      else next.add(dir);
+      return next;
+    });
+  }, []);
+
+  // On opening the dropdown, expand the currently-playing album and scroll it
+  // into view so the user lands on what's playing.
+  useEffect(() => {
+    if (!showPlaylist || !currentDir) return;
+    setExpandedDirs((prev) => new Set(prev).add(currentDir));
+    requestAnimationFrame(() => {
+      currentAlbumRef.current?.scrollIntoView({ block: "nearest" });
+    });
+  }, [showPlaylist, currentDir]);
 
   // ── Track loading (ref-stored so closures over playlist stay fresh) ──────
   const loadAtRef = useRef<(idx: number, list?: PlaylistItem[]) => Promise<void>>(
@@ -170,24 +226,30 @@ export default function App() {
       try {
         const s = await api.getState();
         const isPlaying = s.state === "playing";
-        setPosition(s.position_secs);
-        setDuration((d) => (s.duration_secs > 0 ? s.duration_secs : d));
+        const ended = s.state === "ended";
         setPlaying(isPlaying);
-        if (!seekDragRef.current && s.duration_secs > 0) {
-          setSeekValue(Math.floor((s.position_secs / s.duration_secs) * 1000));
+        setDuration((d) => (s.duration_secs > 0 ? s.duration_secs : d));
+        // On natural end, snap position/seek to the full duration so the bar
+        // doesn't appear frozen short of the end (reported durations can run a
+        // little long vs the actual decoded content).
+        if (ended && s.duration_secs > 0) {
+          setPosition(s.duration_secs);
+          if (!seekDragRef.current) setSeekValue(1000);
+        } else {
+          setPosition(s.position_secs);
+          if (!seekDragRef.current && s.duration_secs > 0) {
+            setSeekValue(Math.floor((s.position_secs / s.duration_secs) * 1000));
+          }
         }
-        // Auto-advance: track was playing, has now stopped near the end → next.
-        // List loops because loadAt wraps the index modulo playlist length.
-        if (
-          wasPlayingRef.current &&
-          !isPlaying &&
-          s.duration_secs > 0 &&
-          s.position_secs >= s.duration_secs - 0.6 &&
-          playlistRef.current.length > 0
-        ) {
+        // Auto-advance: the backend signals "ended" once the decoder hit EOF and
+        // the audio queue fully drained. List loops because loadAt wraps the
+        // index modulo playlist length. The ref guards against re-firing while
+        // the state stays "ended" until the next track starts.
+        if (ended && !endedHandledRef.current && playlistRef.current.length > 0) {
+          endedHandledRef.current = true;
           loadAtRef.current(plIndexRef.current + 1);
         }
-        wasPlayingRef.current = isPlaying;
+        if (!ended) endedHandledRef.current = false;
       } catch { }
     }, STATE_POLL_MS);
     return () => window.clearInterval(id);
@@ -228,6 +290,7 @@ export default function App() {
           name: t.name,
           title: tagTitle || parsed.title,
           artist: tagArtist || parsed.artist,
+          album: t.album,
           startSecs: t.start_secs,
           endSecs: t.end_secs,
         };
@@ -404,25 +467,53 @@ export default function App() {
             </button>
             {showPlaylist && (
               <div className="pl-dropdown" role="listbox">
-                {playlist.map((item, idx) => (
-                  <button
-                    key={`${item.path}-${idx}`}
-                    className={`pl-item${idx === plIndex ? " active" : ""}`}
-                    onClick={() => handlePickTrack(idx)}
-                  >
-                    <span className="pl-item-num">
-                      {String(idx + 1).padStart(2, "0")}
-                    </span>
-                    <span className="pl-item-text">
-                      <span className="pl-item-title">
-                        {item.title || item.name}
-                      </span>
-                      {item.artist && (
-                        <span className="pl-item-artist">{item.artist}</span>
-                      )}
-                    </span>
-                  </button>
-                ))}
+                {albums.map((album) => {
+                  const expanded = expandedDirs.has(album.dir);
+                  const isCurrent = album.dir === currentDir;
+                  return (
+                    <div
+                      key={album.dir}
+                      className="pl-album"
+                      ref={isCurrent ? currentAlbumRef : undefined}
+                    >
+                      <button
+                        className={`pl-album-header${expanded ? " open" : ""}${
+                          isCurrent ? " current" : ""
+                        }`}
+                        onClick={() => toggleAlbum(album.dir)}
+                        title={album.label}
+                      >
+                        <Icon name="chevron-down" size={11} />
+                        <span className="pl-album-name">{album.label}</span>
+                        <span className="pl-album-count">
+                          {album.tracks.length}
+                        </span>
+                      </button>
+                      {expanded &&
+                        album.tracks.map(({ idx, item }, n) => (
+                          <button
+                            key={`${item.path}-${idx}`}
+                            className={`pl-item${idx === plIndex ? " active" : ""}`}
+                            onClick={() => handlePickTrack(idx)}
+                          >
+                            <span className="pl-item-num">
+                              {String(n + 1).padStart(2, "0")}
+                            </span>
+                            <span className="pl-item-text">
+                              <span className="pl-item-title">
+                                {item.title || item.name}
+                              </span>
+                              {item.artist && (
+                                <span className="pl-item-artist">
+                                  {item.artist}
+                                </span>
+                              )}
+                            </span>
+                          </button>
+                        ))}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>

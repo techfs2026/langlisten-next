@@ -11,6 +11,48 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::core::units::Time;
 
+/// DTS core sync words in the four byte orderings seen in DTS-WAV files
+/// (14-bit / 16-bit, little / big endian).
+const DTS_SYNC_WORDS: [[u8; 4]; 4] = [
+    [0xFF, 0x1F, 0x00, 0xE8], // 14-bit LE
+    [0x1F, 0xFF, 0xE8, 0x00], // 14-bit BE
+    [0xFE, 0x7F, 0x01, 0x80], // 16-bit LE
+    [0x7F, 0xFE, 0x80, 0x01], // 16-bit BE
+];
+
+/// Detect a DTS bitstream smuggled inside a PCM WAV container ("DTS-WAV" /
+/// DTS Audio CD). The header declares PCM, but the `data` chunk starts with a
+/// DTS sync word. Soft-fails to `false` on any read/parse problem.
+fn is_dts_wav(path: &Path) -> bool {
+    use std::io::Read;
+    let mut head = [0u8; 4096];
+    let n = match File::open(path).and_then(|mut f| f.read(&mut head)) {
+        Ok(n) => n,
+        Err(_) => return false,
+    };
+    let buf = &head[..n];
+    if buf.len() < 12 || &buf[0..4] != b"RIFF" || &buf[8..12] != b"WAVE" {
+        return false;
+    }
+    // Walk RIFF chunks (4-byte id + 4-byte LE size, padded to even) to `data`.
+    let mut pos = 12usize;
+    while pos + 8 <= buf.len() {
+        let id = &buf[pos..pos + 4];
+        let size = u32::from_le_bytes([buf[pos + 4], buf[pos + 5], buf[pos + 6], buf[pos + 7]])
+            as usize;
+        let body = pos + 8;
+        if id == b"data" {
+            // Sync word may sit at the very start or a couple of bytes in.
+            return [0usize, 2].iter().any(|&off| {
+                let s = body + off;
+                s + 4 <= buf.len() && DTS_SYNC_WORDS.iter().any(|w| w == &buf[s..s + 4])
+            });
+        }
+        pos = body + size + (size & 1);
+    }
+    false
+}
+
 /// Owns demuxer + decoder for one audio track; used by the streaming decode thread.
 pub struct StreamSource {
     format: Box<dyn FormatReader>,
@@ -36,6 +78,14 @@ impl StreamSource {
     /// Open a file, optionally restricted to a `[start_secs, end_secs)` slice
     /// (CUE track). With both `None` it plays the whole file.
     pub fn open_clip(path: &Path, start_secs: Option<f64>, end_secs: Option<f64>) -> Result<Self> {
+        // "DTS-WAV" files declare PCM but carry a DTS bitstream; decoding them as
+        // PCM produces loud static. We can't decode DTS, so reject up front.
+        if is_dts_wav(path) {
+            return Err(anyhow!(
+                "DTS 音频（DTS-WAV）暂不支持解码，已跳过以避免噪音"
+            ));
+        }
+
         let file = File::open(path)?;
         let mss = MediaSourceStream::new(Box::new(file), Default::default());
 

@@ -142,6 +142,10 @@ pub struct AudioPlayer {
     bit_perfect: bool,
     position_secs: Arc<AtomicU64>,
     is_playing: Arc<AtomicBool>,
+    /// Set by the output callback once the decoder reached EOF *and* the queue
+    /// has been fully drained — i.e. the track ended on its own (not paused, not
+    /// user-stopped). The frontend reads this to auto-advance to the next track.
+    playback_finished: Arc<AtomicBool>,
     decode_thread: Option<JoinHandle<()>>,
     decode_abort: Arc<AtomicBool>,
     decode_cmd: Option<Sender<DecodeCmd>>,
@@ -251,6 +255,7 @@ impl AudioPlayer {
             bit_perfect: false,
             position_secs: Arc::new(AtomicU64::new(0)),
             is_playing: Arc::new(AtomicBool::new(false)),
+            playback_finished: Arc::new(AtomicBool::new(false)),
             decode_thread: None,
             decode_abort: Arc::new(AtomicBool::new(false)),
             decode_cmd: None,
@@ -414,6 +419,7 @@ impl AudioPlayer {
         self._stream = Some(stream);
         self.stream_pair = Some(pair);
         self.position_secs.store(0f64.to_bits(), Ordering::Relaxed);
+        self.playback_finished.store(false, Ordering::SeqCst);
         self.is_playing.store(true, Ordering::SeqCst);
 
         Ok(())
@@ -428,6 +434,7 @@ impl AudioPlayer {
     ) -> Result<Stream> {
         let position_secs = Arc::clone(&self.position_secs);
         let is_playing = Arc::clone(&self.is_playing);
+        let playback_finished = Arc::clone(&self.playback_finished);
         let sample_rate_f = config.sample_rate as f64;
         let config_channels = config.channels as usize;
 
@@ -457,6 +464,7 @@ impl AudioPlayer {
                                 *o = 0.0;
                             }
                             is_playing.store(false, Ordering::SeqCst);
+                            playback_finished.store(true, Ordering::SeqCst);
                             break;
                         }
                         output[written] = 0.0;
@@ -535,6 +543,7 @@ impl AudioPlayer {
         self.decode_abort.store(false, Ordering::SeqCst);
 
         self.is_playing.store(false, Ordering::SeqCst);
+        self.playback_finished.store(false, Ordering::SeqCst);
         self.position_secs.store(0f64.to_bits(), Ordering::SeqCst);
     }
 
@@ -542,6 +551,8 @@ impl AudioPlayer {
         let clamped = secs.clamp(0.0, self.duration_secs.max(0.0));
         self.position_secs
             .store(clamped.to_bits(), Ordering::Relaxed);
+        // Seeking (e.g. back from the end) revives a finished track.
+        self.playback_finished.store(false, Ordering::SeqCst);
 
         if let Some(tx) = &self.decode_cmd {
             let _ = tx.send(DecodeCmd::Seek(clamped));
@@ -571,6 +582,9 @@ impl AudioPlayer {
     }
 
     pub fn playback_state_label(&self) -> &'static str {
+        if self.playback_finished.load(Ordering::SeqCst) {
+            return "ended";
+        }
         let Some(pair) = &self.stream_pair else {
             return "idle";
         };

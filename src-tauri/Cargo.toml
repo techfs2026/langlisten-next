@@ -1,7 +1,7 @@
 [package]
 name = "MusicOwl"
 version = "0.1.0"
-description = "A retro music player with emotion-driven visuals"
+description = "A retro MusicOwl with emotion-driven visuals"
 authors = ["techfs"]
 edition = "2021"
 
