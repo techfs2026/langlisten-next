@@ -69,7 +69,7 @@ export default function Cassette({
     energyRef.current = energy;
   }, [energy]);
 
-  const safeTitle = title ? trim(title, 32).toUpperCase() : "— —";
+  const safeTitle = title ? trim(title, 32).toUpperCase() : "UNTITLED";
   useEffect(() => {
     if (!titleRef.current) return;
     const bb = titleRef.current.getBBox();
@@ -913,54 +913,154 @@ export default function Cassette({
 
         {/* ── TAPE STRAND + READ HEAD CUTOUT (between reels) ───────────── */}
         <g>
-          {/* 凹槽底色 + 内阴影 */}
-          {/* Deeper recess for the whole mechanism */}
+          {/* Molded mechanism recess: shallow plastic well, not a solid bar. */}
           <rect
             x="380"
-            y="410"
+            y="412"
             width="244"
-            height="44"
-            rx="4"
+            height="40"
+            rx="6"
+            fill="#1a110c"
+            opacity="0.74"
+          />
+          <rect
+            x="382"
+            y="414"
+            width="240"
+            height="36"
+            rx="5"
+            fill="none"
+            stroke="#0a0604"
+            strokeWidth="1"
+            opacity="0.65"
+          />
+          <path
+            d="M388 418 H616 M388 446 H616"
+            fill="none"
+            stroke="#5a4838"
+            strokeWidth="0.55"
+            opacity="0.22"
+          />
+          <path
+            d="M396 424 C424 424 428 432 450 432 H554 C576 432 580 424 608 424"
+            fill="none"
+            stroke="#050302"
+            strokeWidth="15"
+            strokeLinecap="round"
+            opacity="0.76"
+          />
+          <path
+            d="M398 439 C424 439 431 432 450 432 H554 C573 432 580 439 606 439"
+            fill="none"
+            stroke="#5a4838"
+            strokeWidth="0.65"
+            strokeLinecap="round"
+            opacity="0.26"
+          />
+
+          {/* Side access pockets interrupt the long slot like a real shell. */}
+          {[410, 594].map((cx) => (
+            <g key={`side-pocket-${cx}`}>
+              <path
+                d={`M${cx - 16} 421 h32 l-7 22 h-18 z`}
+                fill="#0a0604"
+                opacity="0.82"
+              />
+              <path
+                d={`M${cx - 14} 422 h28`}
+                stroke="#000000"
+                strokeWidth="0.7"
+                opacity="0.6"
+              />
+            </g>
+          ))}
+
+          {/* Fine magnetic tape path, partially hidden by guides and head. */}
+          <path
+            d="M393 432 C415 432 426 431 446 431.6 H558 C578 431.6 589 432 611 432"
+            fill="none"
+            stroke="#2a1a11"
+            strokeWidth="4.2"
+            strokeLinecap="round"
+          />
+          <path
+            d="M393 430.8 C415 430.8 426 430.4 446 431 H558 C578 431 589 430.8 611 430.8"
+            fill="none"
+            stroke="#6c4b2d"
+            strokeWidth="0.55"
+            strokeLinecap="round"
+            opacity="0.45"
+          />
+          <path
+            d="M393 433.5 C415 433.5 426 433.2 446 433 H558 C578 433.2 589 433.5 611 433.5"
+            fill="none"
+            stroke="#0a0604"
+            strokeWidth="0.55"
+            strokeLinecap="round"
+            opacity="0.65"
+          />
+
+          {/* Narrow well behind the head, broken out from the outer recess. */}
+          <rect
+            x="468"
+            y="414"
+            width="68"
+            height="36"
+            rx="2"
             fill="#0a0604"
             filter="url(#groove-inset)"
           />
-          {/* Recess bottom-edge reflection (subtle 3D cue) */}
-          <line
-            x1="384"
-            y1="452"
-            x2="620"
-            y2="452"
-            stroke="#5a4838"
-            strokeWidth="0.6"
-            opacity="0.45"
-          />
-
-          {/* Continuous tape strand spans the whole recess, gets covered
-              over by the head access window and rollers above it. */}
           <rect
-            x="384"
-            y="429"
-            width="236"
-            height="6"
-            fill="url(#tape-texture)"
-            opacity="0.95"
+            x="468.5"
+            y="414.5"
+            width="67"
+            height="35"
+            rx="2"
+            fill="none"
+            stroke="#5a4838"
+            strokeWidth="0.65"
+            opacity="0.65"
+          />
+          <line
+            x1="470"
+            y1="416"
+            x2="534"
+            y2="416"
+            stroke="#000000"
+            strokeWidth="0.9"
+            opacity="0.75"
+          />
+          <path
+            d="M472 432 H532"
+            fill="none"
+            stroke="#2a1a11"
+            strokeWidth="4.2"
+            strokeLinecap="round"
+          />
+          <path
+            d="M472 430.8 H532"
+            fill="none"
+            stroke="#6c4b2d"
+            strokeWidth="0.55"
+            opacity="0.48"
           />
 
           {/* Tape guide posts at the outer edges (small dark cylinders the
               tape wraps around as it leaves each reel). */}
           {[396, 608].map((cx) => (
             <g key={`guide-${cx}`}>
-              <circle cx={cx} cy="432" r="4.2" fill="#0a0604" />
+              <circle cx={cx} cy="432" r="5.2" fill="#050302" />
               <circle
                 cx={cx}
                 cy="432"
-                r="4.2"
+                r="5.2"
                 fill="none"
-                stroke="#3d2f24"
-                strokeWidth="0.5"
+                stroke="#6a5640"
+                strokeWidth="0.55"
+                opacity="0.65"
               />
-              <circle cx={cx} cy="432" r="2.2" fill="#1f1410" />
-              <circle cx={cx} cy="432" r="0.8" fill="#5a4838" />
+              <circle cx={cx} cy="432" r="2.6" fill="#1f1410" />
+              <circle cx={cx - 1.1} cy="430.8" r="0.8" fill="#8a7958" opacity="0.55" />
             </g>
           ))}
 
@@ -977,17 +1077,17 @@ export default function Cassette({
               <ellipse
                 cx={cx + pinchSide * 7}
                 cy="432"
-                rx="3"
-                ry="5"
+                rx="3.5"
+                ry="6.2"
                 fill="#2a1f17"
-                stroke="#5a4838"
+                stroke="#6a5640"
                 strokeWidth="0.4"
               />
               <ellipse
                 cx={cx + pinchSide * 7}
                 cy="432"
-                rx="1.2"
-                ry="3"
+                rx="1.4"
+                ry="3.7"
                 fill="#0a0604"
                 opacity="0.7"
               />
@@ -1006,42 +1106,11 @@ export default function Cassette({
             </g>
           ))}
 
-          {/* Central head access — recessed deeper than the surrounding
-              groove, the deck's read head pokes up through this opening. */}
-          <rect
-            x="468"
-            y="414"
-            width="68"
-            height="36"
-            rx="2"
-            fill="#050302"
-            stroke="#3d2f24"
-            strokeWidth="0.8"
-          />
-          {/* Tape visible inside the access (continues from outside) */}
-          <rect
-            x="470"
-            y="429"
-            width="64"
-            height="6"
-            fill="url(#tape-texture)"
-          />
-          {/* Top-edge inner shadow of the access opening */}
-          <line
-            x1="469"
-            y1="416"
-            x2="535"
-            y2="416"
-            stroke="#000000"
-            strokeWidth="0.8"
-            opacity="0.7"
-          />
-
           {/* Felt pressure pad — the small spring-backed pad that holds
               the tape against the head. Mounted at top of access window. */}
           <rect
-            x="490"
-            y="416"
+            x="489"
+            y="416.5"
             width="24"
             height="2.5"
             rx="1"
@@ -1049,10 +1118,10 @@ export default function Cassette({
             opacity="0.55"
           />
           <line
-            x1="490"
-            y1="418.5"
-            x2="514"
-            y2="418.5"
+            x1="489"
+            y1="419"
+            x2="513"
+            y2="419"
             stroke="#2a1f17"
             strokeWidth="0.3"
             opacity="0.6"
