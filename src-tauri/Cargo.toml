@@ -31,7 +31,7 @@ crossbeam-channel = "0.5"
 parking_lot = "0.12"
 cpal = "0.17.3"
 lofty = "0.24.0"
-symphonia = "0.5.5"
+symphonia = { version = "0.5.5", features = ["mp3"] }
 realfft = "3.4"
 rustfft = "6.2"
 encoding_rs = "0.8"
